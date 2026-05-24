@@ -1,0 +1,17 @@
+{
+  "creation": "2024-01-01 00:00:00.000000",
+  "doctype": "Page",
+  "module": "ERP Assistant",
+  "name": "erp-chat",
+  "page_name": "erp-chat",
+  "standard": "Yes",
+  "title": "ERP Assistant",
+  "roles": [
+    {
+      "role": "System Manager"
+    },
+    {
+      "role": "All"
+    }
+  ]
+}

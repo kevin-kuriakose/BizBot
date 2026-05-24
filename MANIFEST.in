@@ -1,0 +1,2 @@
+include requirements.txt
+recursive-include erp_assistant *.json *.js *.css *.html *.py

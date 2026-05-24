@@ -1,0 +1,32 @@
+{
+  "doctype": "Workspace",
+  "name": "ERP Assistant",
+  "title": "ERP Assistant",
+  "label": "ERP Assistant",
+  "module": "ERP Assistant",
+  "category": "Modules",
+  "icon": "uil uil-robot",
+  "is_hidden": 0,
+  "public": 1,
+  "for_user": "",
+  "sequence_id": 1,
+  "roles": [],
+  "charts": [],
+  "shortcuts": [],
+  "links": [
+    {
+      "label": "Chat Interface",
+      "type": "Card Break",
+      "hidden": 0
+    },
+    {
+      "label": "ERP Assistant",
+      "link_to": "erp-chat",
+      "link_type": "Page",
+      "type": "Link",
+      "hidden": 0,
+      "onboard": 1
+    }
+  ],
+  "content": "[{\"id\": \"hd-1\", \"type\": \"card\", \"data\": {\"card_name\": \"Chat Interface\", \"col\": 4}}]"
+}
