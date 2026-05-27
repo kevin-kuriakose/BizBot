@@ -17,7 +17,7 @@ def call_ollama(messages, model=MODEL):
             resp = client.post(
                 GROQ_URL,
                 headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Authorization": f"Bearer {frappe.conf.get('groq_api_key', GROQ_API_KEY)}",
                     "Content-Type": "application/json",
                 },
                 json={

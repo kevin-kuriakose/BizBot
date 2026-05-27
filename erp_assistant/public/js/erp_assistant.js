@@ -24,6 +24,40 @@ erp_assistant.widget = {
         document.body.appendChild(fab);
     },
 
+    _perms: null,
+
+    loadPermissions: function(callback) {
+        var self = this;
+        frappe.call({
+            method: "erp_assistant.erp_assistant.api.permissions.get_user_permissions",
+            callback: function(r) {
+                self._perms = r.message || {role_level:"none", can_submit:false};
+                if (callback) callback(self._perms);
+            },
+            error: function() {
+                self._perms = {role_level:"sales_user", can_submit:false};
+                if (callback) callback(self._perms);
+            }
+        });
+    },
+
+    _perms: null,
+
+    loadPermissions: function(callback) {
+        var self = this;
+        frappe.call({
+            method: "erp_assistant.erp_assistant.api.permissions.get_user_permissions",
+            callback: function(r) {
+                self._perms = r.message || {role_level:"none", can_submit:false};
+                if (callback) callback(self._perms);
+            },
+            error: function() {
+                self._perms = {role_level:"sales_user", can_submit:false};
+                if (callback) callback(self._perms);
+            }
+        });
+    },
+
     open: function() {
         var self = this;
         if (!this._dialog) {
@@ -88,33 +122,30 @@ erp_assistant.widget = {
 
         this._dialog.show();
 
-        // Add welcome if empty and wire chips
         setTimeout(function() {
             var msgs = document.getElementById("eca-msgs");
-            if (msgs && msgs.children.length === 0) {
-                self.addMsg("a", "Hey! 👋 I\'m **BB** — your BizBot ERP Assistant.\n\nI can help you:\n📊 **Query data** — \"Show sales this month\"\n📝 **Create documents** — \"Create a sales invoice\"\n📈 **Analytics** — \"Compare Q1 vs Q2 revenue\"\n\nHow can I help you today?");
+            if (!msgs) {
+                // DOM not ready — retry once
+                setTimeout(function() {
+                    if (document.getElementById("eca-msgs") && document.getElementById("eca-msgs").children.length === 0) {
+                        self.addMsg("a", "Hey! 👋 I'm **BB** — your BizBot ERP Assistant.\n\nI can help you:\n📊 **Query data** — Show sales this month\n📝 **Create documents** — Create a sales invoice\n📈 **Analytics** — Compare Q1 vs Q2 revenue\n\nHow can I help you today?");
+                    }
+                }, 500);
+                return;
             }
-            // Wire chip buttons
+            if (msgs.children.length === 0) {
+                self.addMsg("a", "Hey! 👋 I'm **BB** — your BizBot ERP Assistant.\n\nI can help you:\n📊 **Query data** — Show sales this month\n📝 **Create documents** — Create a sales invoice\n📈 **Analytics** — Compare Q1 vs Q2 revenue\n\nHow can I help you today?");
+            }
             document.querySelectorAll(".eca-chip, .bb-chip").forEach(function(btn) {
                 btn.onclick = function() { self.send(btn.getAttribute("data-q")); };
                 btn.onmouseover = function() { this.style.borderColor="#00e5a0"; this.style.color="#00e5a0"; };
                 btn.onmouseout  = function() { this.style.borderColor="#2a2a35"; this.style.color="#888"; };
             });
-            // Style dialog
-            var wrap = self._dialog.$wrapper;
-            if (wrap) {
-                wrap.find(".modal-content").css("background", "#16161a");
-                wrap.find(".modal-header").css({"background":"#1a1a1f","border-bottom":"1px solid #2a2a35"});
-                wrap.find(".modal-title").css("color","#f0f0f4");
-                wrap.find(".modal-footer").css({"background":"#1a1a1f","border-top":"1px solid #2a2a35"});
-                wrap.find(".btn-primary").css({"background":"#00e5a0","border-color":"#00e5a0","color":"#000"});
-                wrap.find("input[data-fieldname='message']").css({
-                    "background":"#0f0f11","border-color":"#2a2a35","color":"#ddd"
-                });
-            }
-        }, 100);
+            self.loadPermissions(function(perms) {
+                self._applyPermissions(perms);
+            });
+        }, 300);
     },
-
     quickSend: function(msg) {
         this.send(msg);
     },
@@ -196,6 +227,119 @@ erp_assistant.widget = {
             '<div style="'+bubbleStyle+'">'+t+tableHtml+'</div>';
         msgs.appendChild(d);
         msgs.scrollTop = msgs.scrollHeight;
+    },
+
+    _applyPermissions: function(perms) {
+        if (!perms) return;
+        var role = perms.role_level;
+        var chips = document.querySelectorAll(".bb-chip, .eca-chip");
+
+        // Define which chips each role sees
+        var hiddenForSalesUser = [
+            "Create a new sales invoice",   // sales user can create but not submit — keep visible
+            "Show pending purchase orders", // POs hidden for sales user
+        ];
+        var hiddenForStoreManager = [];     // store manager sees everything except...
+
+        chips.forEach(function(btn) {
+            var q = btn.getAttribute("data-q") || "";
+            var hide = false;
+
+            if (role === "sales_user") {
+                // Hide PO chip, analytics chips
+                if (q.toLowerCase().indexOf("purchase order") !== -1) hide = true;
+            }
+
+            if (role === "none") {
+                hide = true; // hide all chips for no-role users
+            }
+
+            btn.style.display = hide ? "none" : "";
+        });
+
+        // Show role badge in dialog
+        var existing = document.getElementById("bb-role-badge");
+        if (existing) existing.remove();
+
+        var roleLabels = {
+            "admin": {label:"Admin", color:"#ff6b6b"},
+            "store_manager": {label:"Store Manager", color:"#ffd93d"},
+            "sales_user": {label:"Sales User", color:"#6bcb77"},
+            "none": {label:"Limited Access", color:"#888"}
+        };
+        var rl = roleLabels[role] || roleLabels["none"];
+
+        var badge = document.createElement("div");
+        badge.id = "bb-role-badge";
+        badge.style.cssText = "font-size:10px;padding:2px 8px;border-radius:10px;display:inline-block;margin-bottom:6px;font-weight:600;";
+        badge.style.background = rl.color + "22";
+        badge.style.color = rl.color;
+        badge.style.border = "1px solid " + rl.color + "44";
+        badge.textContent = "● " + rl.label;
+
+        // Insert badge above the messages area
+        var msgs = document.getElementById("eca-msgs");
+        if (msgs) {
+            msgs.insertBefore(badge, msgs.firstChild);
+        } else {
+            // Fallback: insert into dialog body
+            var body = document.querySelector(".modal-body");
+            if (body) body.insertBefore(badge, body.firstChild);
+        }
+    },
+
+    _applyPermissions: function(perms) {
+        if (!perms) return;
+        var role = perms.role_level;
+        var chips = document.querySelectorAll(".bb-chip, .eca-chip");
+
+        // Define which chips each role sees
+        var hiddenForSalesUser = [
+            "Create a new sales invoice",   // sales user can create but not submit — keep visible
+            "Show pending purchase orders", // POs hidden for sales user
+        ];
+        var hiddenForStoreManager = [];     // store manager sees everything except...
+
+        chips.forEach(function(btn) {
+            var q = btn.getAttribute("data-q") || "";
+            var hide = false;
+
+            if (role === "sales_user") {
+                // Hide PO chip, analytics chips
+                if (q.toLowerCase().indexOf("purchase order") !== -1) hide = true;
+            }
+
+            if (role === "none") {
+                hide = true; // hide all chips for no-role users
+            }
+
+            btn.style.display = hide ? "none" : "";
+        });
+
+        // Show role badge in dialog
+        var existing = document.getElementById("bb-role-badge");
+        if (existing) existing.remove();
+
+        var roleLabels = {
+            "admin": {label:"Admin", color:"#ff6b6b"},
+            "store_manager": {label:"Store Manager", color:"#ffd93d"},
+            "sales_user": {label:"Sales User", color:"#6bcb77"},
+            "none": {label:"Limited Access", color:"#888"}
+        };
+        var rl = roleLabels[role] || roleLabels["none"];
+
+        var badge = document.createElement("div");
+        badge.id = "bb-role-badge";
+        badge.style.cssText = "font-size:10px;padding:2px 8px;border-radius:10px;display:inline-block;margin-bottom:6px;font-weight:600;";
+        badge.style.background = rl.color + "22";
+        badge.style.color = rl.color;
+        badge.style.border = "1px solid " + rl.color + "44";
+        badge.textContent = "● " + rl.label;
+
+        var msgs = document.getElementById("eca-msgs");
+        if (msgs && msgs.parentNode) {
+            msgs.parentNode.insertBefore(badge, msgs);
+        }
     },
 
     send: function(msg) {

@@ -3,45 +3,28 @@ import frappe
 _schema_cache = {}
 _installed_apps_cache = None
 
-# Only DocTypes confirmed to exist in standard ERPNext v15
 CORE_DOCTYPES = [
-    "Sales Invoice", "Purchase Invoice", "Sales Order", "Purchase Order",
-    "Customer", "Supplier", "Item", "Stock Ledger Entry", "Stock Entry",
-    "Journal Entry", "Payment Entry", "Employee", "Quotation",
-    "Delivery Note", "Purchase Receipt",
+    "BA Sales Invoice", "BA Purchase Invoice", "BA Sales Order",
+    "BA Purchase Order", "BA Customer", "BA Supplier", "BA Item",
+    "BA Stock Ledger Entry", "BA Stock Entry", "BA Journal Entry",
+    "BA Payment Entry", "BA Employee", "BA Quotation", "BA Account",
+    "BA Cost Center",
 ]
 
 CUSTOM_APP_DOCTYPES = {
-    "logistics_transport_erp": [
-        "Shipment", "Vehicle", "Driver",
-    ],
-    "retail_erp": [
-        "Weigh Label", "Store Profile", "POS Invoice",
-    ],
-    "energy_erp": [
-        "Power Plant", "Generation Log", "Energy Bill",
-        "Fuel Receipt",
-    ],
-    "civic_erp": [
-        "Grant", "Donor", "Fund", "Beneficiary", "Program",
-    ],
-    "museum_erp": [
-        "Artifact", "Exhibition", "Loan", "Conservation Record",
-    ],
-    "proserv_erp": [
-        "Client", "Engagement", "Timesheet Entry", "Fee Note",
-        "Staff Profile",
-    ],
-    "organ_donation_erp": [
-        "Donor Pledge", "Deceased Donor", "Organ Record",
-        "Recipient", "Transplant Surgery",
-    ],
-    "vetcare_management": [
-        "Patient", "Appointment",
-    ],
-    "healthcare": [
-        "Patient", "Patient Appointment",
-    ],
+    "bizaxl_stock": ["BA Item", "BA Warehouse", "BA Stock Entry", "BA Item Price", "BA Batch"],
+    "bizaxl_hr": ["BA Employee", "BA Department", "BA Designation", "BA Leave Application", "BA Attendance", "BA Expense Claim"],
+    "bizaxl_payroll": ["BA Salary Slip", "BA Payroll Entry", "BA Salary Structure", "BA Salary Component"],
+    "bizaxl_projects": ["BA Project", "BA Task", "BA Timesheet"],
+    "bizaxl_crm": ["BA Lead", "BA Opportunity", "BA Campaign"],
+    "bizaxl_assets": ["BA Asset", "BA Asset Movement", "BA Asset Maintenance"],
+    "bizaxl_pos": ["BA POS Invoice", "BA POS Profile", "BA POS Closing Entry"],
+    "retail_erp": ["Weigh Label", "Store Profile", "Cashier Shift"],
+    "energy_erp": ["Power Plant", "Generation Log", "Energy Bill", "Fuel Receipt"],
+    "civic_erp": ["Grant", "Donor", "Fund", "Beneficiary", "Program"],
+    "museum_erp": ["Artifact", "Exhibition", "Loan", "Conservation Record"],
+    "proserv_erp": ["Client", "Engagement", "Timesheet Entry", "Fee Note"],
+    "organ_donation_erp": ["Donor Pledge", "Deceased Donor", "Organ Record", "Recipient", "Transplant Surgery"],
 }
 
 _SKIP_FIELDTYPES = frozenset([
@@ -67,22 +50,17 @@ def get_schema_context(focus_doctypes=None):
     all_doctypes = list(CORE_DOCTYPES)
     for app_name, dts in CUSTOM_APP_DOCTYPES.items():
         if app_name in installed:
-            all_doctypes.extend(dts)
-
-    seen = set()
-    deduped = []
-    for dt in all_doctypes:
-        if dt not in seen:
-            seen.add(dt)
-            deduped.append(dt)
+            for dt in dts:
+                if dt not in all_doctypes:
+                    all_doctypes.append(dt)
 
     if focus_doctypes:
-        priority = [dt for dt in focus_doctypes if dt in seen]
-        rest = [dt for dt in deduped if dt not in set(priority)]
-        deduped = priority + rest
+        priority = [dt for dt in focus_doctypes if dt in all_doctypes]
+        rest = [dt for dt in all_doctypes if dt not in set(priority)]
+        all_doctypes = priority + rest
 
     schema_lines = []
-    for dt in deduped[:30]:
+    for dt in all_doctypes[:30]:
         if dt in _schema_cache:
             schema_lines.append(_schema_cache[dt])
             continue
@@ -98,7 +76,6 @@ def _build_schema_line(doctype):
     try:
         meta = frappe.get_meta(doctype)
     except Exception:
-        # DocType doesn't exist in this install — skip silently
         return None
 
     fields = []
@@ -107,7 +84,7 @@ def _build_schema_line(doctype):
             continue
         info = f"{f.fieldname} ({f.fieldtype}"
         if f.fieldtype == "Link" and f.options:
-            info += f" → {f.options}"
+            info += f" -> {f.options}"
         elif f.fieldtype == "Select" and f.options:
             opts = [o for o in f.options.split("\n") if o][:4]
             info += f": {', '.join(opts)}"
@@ -121,7 +98,8 @@ def _build_schema_line(doctype):
     if not fields:
         return None
 
-    return f"TABLE `tab{doctype}`: " + ", ".join(fields)
+    table_name = f"tabBA {doctype[3:]}" if doctype.startswith("BA ") else f"tab{doctype}"
+    return f"TABLE `{table_name}`: " + ", ".join(fields)
 
 
 def get_doctype_fields(doctype):

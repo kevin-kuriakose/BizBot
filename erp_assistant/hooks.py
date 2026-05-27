@@ -6,7 +6,7 @@ app_email = "dev@bizaxl.com"
 app_license = "MIT"
 app_version = "0.0.1"
 
-required_apps = ["frappe", "erpnext"]
+required_apps = ["frappe", "bizaxl_erp"]
 
 app_include_css = "/assets/erp_assistant/css/erp_assistant.css"
 app_include_js = "/assets/erp_assistant/js/erp_assistant.js"

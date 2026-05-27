@@ -6,6 +6,10 @@ from erp_assistant.erp_assistant.api.intent import classify_intent
 from erp_assistant.erp_assistant.api.query import execute_query
 from erp_assistant.erp_assistant.api.document import handle_write
 from erp_assistant.erp_assistant.api.schema import get_schema_context
+from erp_assistant.erp_assistant.api.permissions import (
+    get_user_permissions, can_submit, can_create,
+    get_allowed_modules, is_admin, get_role_level
+)
 
 # Frappe table name map — used to correct hallucinated names
 TABLE_ALIASES = {
@@ -55,12 +59,25 @@ def chat(message, history=None, session_data=None, context=None):
     page_context = json.loads(context) if isinstance(context, str) else (context or {})
 
     try:
-        if session_data.get("mode") in ("collecting_fields", "confirm_submit", "collecting_items", "confirm_create_linked", "collecting_linked_fields", "confirm_create_item", "resubmit"):
+        if session_data.get("mode") in ("collecting_fields", "confirm_submit", "collecting_items", "confirm_create_linked", "collecting_linked_fields", "confirm_create_item", "creating_new_item", "confirm_restart", "resubmit"):
             return handle_write(message, history, session_data, {})
 
         intent = classify_intent(message, history)
 
         if intent["type"] == "write":
+            # Check create permission
+            doctype = intent.get("doctypes", [None])[0]
+            if doctype and not can_create(doctype):
+                role = get_role_level().replace("_", " ").title()
+                return {
+                    "response": (
+                        "You don't have permission to create **" + (doctype or "") + "**.\n\n"
+                        "Your role (" + role + ") cannot create this document type.\n\n"
+                        "Please contact your Store Manager or Admin."
+                    ),
+                    "type": "error",
+                    "session_data": {},
+                }
             return handle_write(message, history, session_data, intent)
         elif intent["type"] == "analytics":
             return handle_analytics(message, history, intent, page_context)

@@ -314,3 +314,39 @@
     50% { box-shadow: 0 4px 30px rgba(0,229,160,0.9); }
     100% { box-shadow: 0 4px 20px rgba(0,229,160,0.6); }
 }
+
+/* BizBot Dialog Dark Theme */
+.modal-content {
+    background: #16161a !important;
+    border: 1px solid #2a2a35 !important;
+    color: #ddd !important;
+}
+.modal-header {
+    background: #1a1a1f !important;
+    border-bottom: 1px solid #2a2a35 !important;
+}
+.modal-title {
+    color: #f0f0f4 !important;
+}
+.modal-footer {
+    background: #1a1a1f !important;
+    border-top: 1px solid #2a2a35 !important;
+}
+.modal-body {
+    background: #16161a !important;
+}
+.modal-body .frappe-control,
+.modal-body .form-group,
+.modal-body .form-control {
+    background: #0f0f11 !important;
+    color: #ddd !important;
+    border-color: #2a2a35 !important;
+}
+.modal-body input.form-control {
+    background: #0f0f11 !important;
+    color: #ddd !important;
+}
+.modal-body .form-control:focus {
+    border-color: #00e5a0 !important;
+    box-shadow: 0 0 0 2px rgba(0,229,160,0.15) !important;
+}
