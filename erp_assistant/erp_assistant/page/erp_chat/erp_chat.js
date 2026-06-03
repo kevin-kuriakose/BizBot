@@ -13,6 +13,8 @@ class ERPChatApp {
         this.page = page;
         this.history = [];
         this.sessionData = {};
+        this.pdfContext = null;
+        this.pdfFilename = "";
         this.render();
         this.bindEvents();
     }
@@ -286,6 +288,15 @@ class ERPChatApp {
     border-color: rgba(255,100,100,0.25);
     color: #ff8080;
 }
+
+/* ── PDF attach ── */
+.eca-attach-btn{width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,0.07);border:none;color:#a0a0b0;font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.12s;flex-shrink:0}
+.eca-attach-btn:hover{background:rgba(255,255,255,0.12);color:#f0f0f4}
+.eca-pdf-bar{padding:6px 16px;background:rgba(0,229,160,0.08);border-top:1px solid rgba(0,229,160,0.15);display:flex;align-items:center;gap:8px;font-size:12px;color:#00e5a0}
+.eca-pdf-bar span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eca-pdf-clear{background:none;border:none;color:#50505f;cursor:pointer;font-size:15px;padding:0 2px;line-height:1}
+.eca-pdf-clear:hover{color:#ff8080}
+
 </style>
 
 <div id="erp-chat-root">
@@ -325,9 +336,12 @@ class ERPChatApp {
         <button class="eca-qbtn" data-msg="Show all pending purchase orders">🛒 Pending POs</button>
     </div>
 
+    <div class="eca-pdf-bar" id="eca-pdf-bar" style="display:none"><span id="eca-pdf-name">📄 </span><button class="eca-pdf-clear" id="eca-pdf-clear" title="Remove PDF">✕</button></div>
+    <input type="file" id="eca-pdf-input" accept=".pdf" style="display:none">
     <div class="eca-input-area">
         <textarea id="eca-input" rows="1"
             placeholder="Ask anything about your ERP data…"></textarea>
+        <button id="eca-attach" class="eca-attach-btn" title="Attach PDF">📎</button>
         <button id="eca-send" title="Send (Enter)">➤</button>
     </div>
 
@@ -354,6 +368,11 @@ class ERPChatApp {
 
         // Send button
         sendBtn.addEventListener('click', () => this.send());
+
+        // PDF attach / clear
+        document.getElementById('eca-attach').addEventListener('click', () => document.getElementById('eca-pdf-input').click());
+        document.getElementById('eca-pdf-input').addEventListener('change', (e) => { if (e.target.files[0]) this.loadPdf(e.target.files[0]); e.target.value = ''; });
+        document.getElementById('eca-pdf-clear').addEventListener('click', () => this.clearPdf());
 
         // Quick prompt buttons
         document.querySelectorAll('.eca-qbtn').forEach(btn => {
@@ -383,13 +402,12 @@ class ERPChatApp {
         const typingId = this.addTyping();
 
         try {
-            const result = await frappe.call({
+            const result = await frappe.call(this.pdfContext ? {
+                method: 'erp_assistant.erp_assistant.api.pdf.chat_with_pdf',
+                args: { message, pdf_text: this.pdfContext, history: JSON.stringify(this.history.slice(-8)), pdf_filename: this.pdfFilename },
+            } : {
                 method: 'erp_assistant.erp_assistant.api.chat.chat',
-                args: {
-                    message: message,
-                    history: JSON.stringify(this.history.slice(-12)),
-                    session_data: JSON.stringify(this.sessionData),
-                },
+                args: { message: message, history: JSON.stringify(this.history.slice(-12)), session_data: JSON.stringify(this.sessionData) },
             });
 
             this.removeTyping(typingId);
@@ -518,4 +536,58 @@ class ERPChatApp {
         if (dot) dot.style.boxShadow = online ? '0 0 5px #00e5a0' : '0 0 5px #f0a500';
         if (label) label.textContent = text;
     }
+    async loadPdf(file) {
+        const bar = document.getElementById('eca-pdf-bar');
+        const nameEl = document.getElementById('eca-pdf-name');
+        nameEl.textContent = '📄 Uploading ' + file.name + '…';
+        bar.style.display = 'flex';
+        this.setStatus('Reading PDF…', false);
+        try {
+            // upload to Frappe
+            const fd = new FormData();
+            fd.append('file', file); fd.append('is_private', '0');
+            const up = await fetch('/api/method/upload_file', {
+                method: 'POST', body: fd,
+                headers: { 'X-Frappe-CSRF-Token': frappe.csrf_token },
+            });
+            const upData = await up.json();
+            if (!upData.message?.file_url) throw new Error('Upload failed');
+
+            // extract text
+            nameEl.textContent = '📄 Extracting ' + file.name + '…';
+            const ext = await frappe.call({
+                method: 'erp_assistant.erp_assistant.api.pdf.extract_pdf_text',
+                args: { file_url: upData.message.file_url },
+            });
+            const { text, pages, characters } = ext.message;
+            this.pdfContext = text;
+            this.pdfFilename = file.name;
+            this.history = [];
+            nameEl.textContent = '📄 ' + file.name + ' (' + pages + ' pages)';
+
+            // auto-summarise
+            this.setStatus('Summarising…', false);
+            const sum = await frappe.call({
+                method: 'erp_assistant.erp_assistant.api.pdf.summarise_pdf',
+                args: { pdf_text: text, pdf_filename: file.name },
+            });
+            this.addMessage('assistant',
+                '📄 **' + file.name + '** loaded — ' + pages + ' pages, ' + characters.toLocaleString() + ' characters.\n\n' + sum.message.summary,
+                { type: 'pdf_read' }
+            );
+        } catch (err) {
+            bar.style.display = 'none';
+            this.pdfContext = null;
+            this.addMessage('assistant', '❌ Could not read PDF: ' + (err.message || err), { type: 'error' });
+        } finally {
+            this.setStatus('Online', true);
+        }
+    }
+
+    clearPdf() {
+        this.pdfContext = null; this.pdfFilename = ''; this.history = [];
+        document.getElementById('eca-pdf-bar').style.display = 'none';
+        this.addMessage('assistant', '📄 PDF removed. Back to normal ERP mode.', {});
+    }
+
 }

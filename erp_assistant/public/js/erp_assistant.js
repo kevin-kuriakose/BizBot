@@ -88,7 +88,7 @@ erp_assistant.widget = {
                             '<button class="bb-chip" data-q="Create a new sales invoice" ' +
                             'style="padding:4px 10px;border-radius:12px;border:1px solid #2a2a35;' +
                             'background:transparent;color:#888;cursor:pointer;font-size:11px">➕ Invoice</button>' +
-                            '</div>'
+                            '<button id="bb-pdf-btn" class="bb-chip" style="padding:4px 10px;border-radius:12px;border:1px solid #2a2a35;background:transparent;color:#888;cursor:pointer;font-size:11px">📎 PDF</button></div>'
                     },
                     {
                         fieldtype: "Data",
@@ -141,6 +141,27 @@ erp_assistant.widget = {
                 btn.onmouseover = function() { this.style.borderColor="#00e5a0"; this.style.color="#00e5a0"; };
                 btn.onmouseout  = function() { this.style.borderColor="#2a2a35"; this.style.color="#888"; };
             });
+            // Wire up PDF chip
+            var pdfBtn = document.getElementById("bb-pdf-btn");
+            if (pdfBtn) {
+                pdfBtn.onmouseover = function() { if (!self._doc) { this.style.borderColor="#00e5a0"; this.style.color="#00e5a0"; } };
+                pdfBtn.onmouseout  = function() { if (!self._doc) { this.style.borderColor="#2a2a35"; this.style.color="#888"; } };
+                pdfBtn.onclick = function() {
+                    if (self._doc) { self.clearPdf(); return; }
+                    var fi = document.getElementById("bb-file-input");
+                    if (!fi) {
+                        fi = document.createElement("input");
+                        fi.type = "file"; fi.id = "bb-file-input";
+                        fi.accept = ".pdf,application/pdf"; fi.style.display = "none";
+                        document.body.appendChild(fi);
+                        fi.addEventListener("change", function(e) {
+                            if (e.target.files && e.target.files[0]) self.processPdf(e.target.files[0]);
+                            fi.value = "";
+                        });
+                    }
+                    fi.click();
+                };
+            }
             self.loadPermissions(function(perms) {
                 self._applyPermissions(perms);
             });
@@ -357,33 +378,12 @@ erp_assistant.widget = {
         td.innerHTML = '<div style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#00e5a0,#00c47a);display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:8px;font-weight:800;color:#0a1a12">BB</span></div>' +
             '<div style="padding:8px 12px;border-radius:10px;font-size:12px;background:#1e1e26;color:#555;border:1px solid #2a2a35;border-left:3px solid #00e5a0">Thinking…</div>';
         if (msgs) { msgs.appendChild(td); msgs.scrollTop = msgs.scrollHeight; }
-
         frappe.call({
-            method: "erp_assistant.erp_assistant.api.chat.chat",
-            args: {
-                message: msg,
-                history: JSON.stringify(this._history.slice(-10)),
-                session_data: JSON.stringify(this._session),
-                context: JSON.stringify({
-                    route: frappe.get_route ? frappe.get_route() : [],
-                    route_str: frappe.get_route_str ? frappe.get_route_str() : '',
-                    user: frappe.session.user
-                })
-            },
-            timeout: 180,
-            callback: function(r) {
-                var el = document.getElementById(tid); if (el) el.remove();
-                var res = r.message;
-                if (res) {
-                    self._session = res.session_data || {};
-                    self.addMsg("a", res.response || "No response.", res);
-                    self._history.push({role:"assistant",content:res.response||""});
-                }
-                self._waiting = false;
-            },
+            method: _method, args: _args, timeout: 180,
+            callback: _onSuccess,
             error: function() {
                 var el = document.getElementById(tid); if (el) el.remove();
-                self.addMsg("a", "❌ Error. Groq API error — check your API key");
+                self.addMsg("a", "\u274C Error connecting to AI. Check your API key.");
                 self._waiting = false;
             }
         });
@@ -413,3 +413,169 @@ var _ecaPoll = setInterval(function() {
     _ecaAutoInit();
 }, 2000);
 setTimeout(function() { clearInterval(_ecaPoll); }, 60000);
+
+// ── BizBot PDF RAG extension (appended after widget definition) ──────────────
+erp_assistant.widget._doc = null;
+
+erp_assistant.widget.processPdf = function(file) {
+    var self = this;
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+        self.addMsg("a", "\u274C PDF too large (max 20 MB).");
+        return;
+    }
+    self.addMsg("a", "\uD83D\uDCCE Processing **" + file.name + "**\u2026 one moment.");
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        var b64 = (e.target.result || "").split(",")[1];
+        if (!b64) { self.addMsg("a", "\u274C Could not read the file."); return; }
+        frappe.call({
+            method: "erp_assistant.erp_assistant.api.pdf.process_pdf",
+            args: { file_b64: b64, file_name: file.name },
+            timeout: 120,
+            callback: function(r) {
+                if (r.message && r.message.doc_id) {
+                    self._doc = { doc_id: r.message.doc_id, name: r.message.name };
+                    var m = r.message;
+                    var btn = document.getElementById("bb-pdf-btn");
+                    if (btn) {
+                        var sn = file.name.length > 14 ? file.name.slice(0,11) + "\u2026" : file.name;
+                        btn.innerHTML = "\uD83D\uDCCE " + sn + " \u00D7";
+                        btn.style.borderColor = "#00e5a0";
+                        btn.style.color = "#00e5a0";
+                    }
+                    self.addMsg("a",
+                        "\u2705 **" + file.name + "** loaded!\n\n" +
+                        "\uD83D\uDCC4 ~" + m.word_count + " words \u00B7 " + m.chunk_count + " sections indexed\n\n" +
+                        "Ask me anything about this document."
+                    );
+                }
+            },
+            error: function() {
+                self.addMsg("a", "\u274C Failed to process PDF. Run: pip install pypdf --break-system-packages");
+            }
+        });
+    };
+    reader.readAsDataURL(file);
+};
+
+erp_assistant.widget.clearPdf = function() {
+    this._doc = null;
+    var btn = document.getElementById("bb-pdf-btn");
+    if (btn) {
+        btn.innerHTML = "\uD83D\uDCCE PDF";
+        btn.style.borderColor = "#2a2a35";
+        btn.style.color = "#888";
+    }
+    this.addMsg("a", "\uD83D\uDCCE Document removed. Back to ERP mode.");
+};
+
+// Override send() to branch into PDF RAG when a document is loaded
+(function() {
+    var _origSend = erp_assistant.widget.send.bind(erp_assistant.widget);
+    erp_assistant.widget.send = function(msg) {
+        if (!msg || this._waiting) return;
+        if (!this._doc) { return _origSend(msg); }
+
+        // PDF RAG mode
+        var self = this;
+        self.addMsg("u", msg);
+        self._history.push({role: "user", content: msg});
+        self._waiting = true;
+
+        var msgs = document.getElementById("eca-msgs");
+        var tid = "et" + Date.now();
+        var td = document.createElement("div");
+        td.id = tid;
+        td.style.cssText = "display:flex;gap:7px;";
+        td.innerHTML = '<div style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#00e5a0,#00c47a);display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:8px;font-weight:800;color:#0a1a12">BB</span></div>' +
+            '<div style="padding:8px 12px;border-radius:10px;font-size:12px;background:#1e1e26;color:#555;border:1px solid #2a2a35;border-left:3px solid #00e5a0">Reading document\u2026</div>';
+        if (msgs) { msgs.appendChild(td); msgs.scrollTop = msgs.scrollHeight; }
+
+        frappe.call({
+            method: "erp_assistant.erp_assistant.api.pdf.ask_with_doc",
+            args: { question: msg, doc_id: self._doc.doc_id, doc_name: self._doc.name },
+            timeout: 180,
+            callback: function(r) {
+                var el = document.getElementById(tid); if (el) el.remove();
+                var answer = (r.message || "I couldn\'t find an answer in the document.");
+                self.addMsg("a", answer);
+                self._history.push({role: "assistant", content: answer});
+                self._waiting = false;
+            },
+            error: function() {
+                var el = document.getElementById(tid); if (el) el.remove();
+                self.addMsg("a", "\u274C Error reading document. Check your API key.");
+                self._waiting = false;
+            }
+        });
+    };
+})();
+
+// ── Complete send() override — handles both normal chat AND PDF RAG ──────────
+erp_assistant.widget.send = function(msg) {
+    if (!msg || this._waiting) return;
+    var self = this;
+    self.addMsg("u", msg);
+    self._history.push({role: "user", content: msg});
+    self._waiting = true;
+
+    var msgs = document.getElementById("eca-msgs");
+    var tid  = "et" + Date.now();
+    var td   = document.createElement("div");
+    td.id    = tid;
+    td.style.cssText = "display:flex;gap:7px;";
+    var thinkLabel = self._doc ? "Reading document\u2026" : "Thinking\u2026";
+    td.innerHTML =
+        '<div style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#00e5a0,#00c47a);display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
+        '<span style="font-size:8px;font-weight:800;color:#0a1a12">BB</span></div>' +
+        '<div style="padding:8px 12px;border-radius:10px;font-size:12px;background:#1e1e26;color:#555;border:1px solid #2a2a35;border-left:3px solid #00e5a0">' + thinkLabel + '</div>';
+    if (msgs) { msgs.appendChild(td); msgs.scrollTop = msgs.scrollHeight; }
+
+    var method, args, onSuccess;
+
+    if (self._doc) {
+        // ── PDF RAG mode ──────────────────────────────────────────────────────
+        method = "erp_assistant.erp_assistant.api.pdf.ask_with_doc";
+        args   = { question: msg, doc_id: self._doc.doc_id, doc_name: self._doc.name };
+        onSuccess = function(r) {
+            var el = document.getElementById(tid); if (el) el.remove();
+            self.addMsg("a", r.message || "I couldn\'t find an answer in the document.");
+            self._history.push({role: "assistant", content: r.message || ""});
+            self._waiting = false;
+        };
+    } else {
+        // ── Normal ERP chat mode ──────────────────────────────────────────────
+        method = "erp_assistant.erp_assistant.api.chat.chat";
+        args   = {
+            message: msg,
+            history: JSON.stringify(self._history.slice(-10)),
+            session_data: JSON.stringify(self._session),
+            context: JSON.stringify({
+                route:     frappe.get_route     ? frappe.get_route()     : [],
+                route_str: frappe.get_route_str ? frappe.get_route_str() : "",
+                user:      frappe.session.user
+            })
+        };
+        onSuccess = function(r) {
+            var el = document.getElementById(tid); if (el) el.remove();
+            var res = r.message;
+            if (res) {
+                self._session = res.session_data || {};
+                self.addMsg("a", res.response || "No response.", res);
+                self._history.push({role: "assistant", content: res.response || ""});
+            }
+            self._waiting = false;
+        };
+    }
+
+    frappe.call({
+        method: method, args: args, timeout: 180,
+        callback: onSuccess,
+        error: function() {
+            var el = document.getElementById(tid); if (el) el.remove();
+            self.addMsg("a", "\u274C Error. Check your Groq API key.");
+            self._waiting = false;
+        }
+    });
+};
