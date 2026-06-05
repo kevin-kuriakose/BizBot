@@ -7,13 +7,13 @@ CORE_DOCTYPES = [
     "BA Sales Invoice", "BA Purchase Invoice", "BA Sales Order",
     "BA Purchase Order", "BA Customer", "BA Supplier", "BA Item",
     "BA Stock Ledger Entry", "BA Stock Entry", "BA Journal Entry",
-    "BA Payment Entry", "BA Employee", "BA Quotation", "BA Account",
+    "BA Payment Entry", "BA Quotation", "BA Account",
     "BA Cost Center",
 ]
 
 CUSTOM_APP_DOCTYPES = {
     "bizaxl_stock": ["BA Item", "BA Warehouse", "BA Stock Entry", "BA Item Price", "BA Batch"],
-    "bizaxl_hr": ["BA Employee", "BA Department", "BA Designation", "BA Leave Application", "BA Attendance", "BA Expense Claim"],
+    "bizaxl_hr": ["BA Department", "BA Designation", "BA Leave Application", "BA Attendance", "BA Expense Claim"],
     "bizaxl_payroll": ["BA Salary Slip", "BA Payroll Entry", "BA Salary Structure", "BA Salary Component"],
     "bizaxl_projects": ["BA Project", "BA Task", "BA Timesheet"],
     "bizaxl_crm": ["BA Lead", "BA Opportunity", "BA Campaign"],
@@ -43,15 +43,33 @@ def _get_installed_apps():
     return _installed_apps_cache
 
 
+def _get_site_doctypes():
+    """Return set of DocType names that actually exist on this site."""
+    cache_key = "schema_site_doctypes"
+    cached = frappe.cache().get_value(cache_key)
+    if cached:
+        import json
+        return set(json.loads(cached))
+    try:
+        existing = frappe.db.get_all("DocType", fields=["name"], as_list=True)
+        names = {r[0] for r in existing}
+        import json
+        frappe.cache().set_value(cache_key, json.dumps(list(names)), expires_in_sec=3600)
+        return names
+    except Exception:
+        return set()
+
+
 def get_schema_context(focus_doctypes=None):
     global _schema_cache
-    installed = _get_installed_apps()
+    installed   = _get_installed_apps()
+    site_types  = _get_site_doctypes()   # only doctypes that actually exist
 
-    all_doctypes = list(CORE_DOCTYPES)
+    all_doctypes = [dt for dt in CORE_DOCTYPES if dt in site_types]
     for app_name, dts in CUSTOM_APP_DOCTYPES.items():
         if app_name in installed:
             for dt in dts:
-                if dt not in all_doctypes:
+                if dt in site_types and dt not in all_doctypes:
                     all_doctypes.append(dt)
 
     if focus_doctypes:
@@ -131,3 +149,4 @@ def clear_schema_cache():
     global _schema_cache, _installed_apps_cache
     _schema_cache = {}
     _installed_apps_cache = None
+    frappe.cache().delete_value("schema_site_doctypes")

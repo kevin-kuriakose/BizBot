@@ -22,11 +22,20 @@ HELP_PHRASES = [
     "what fields are", "required for", "navigate to",
 ]
 
+# Questions about BizBot's own capabilities — answer conversationally, never run SQL
+CAPABILITY_PHRASES = [
+    "can you", "can u", "can bb", "can bizbot", "can i",
+    "could you", "could u", "will you", "would you", "are you able",
+    "do you support", "do you have", "is it possible", "is there a way",
+    "able to", "allowed to", "is bizbot", "does bizbot",
+    "what can you", "what can bb", "what can bizbot",
+]
+
 KNOWN_DOCTYPES = [
     "BA Sales Invoice", "BA Purchase Invoice", "BA Sales Order",
     "BA Purchase Order", "BA Customer", "BA Supplier", "BA Item",
     "BA Stock Entry", "BA Journal Entry", "BA Payment Entry",
-    "BA Employee", "BA Quotation", "BA Account", "BA Cost Center",
+"BA Quotation", "BA Account", "BA Cost Center",
     "BA Lead", "BA Opportunity", "BA Project", "BA Task", "BA Timesheet",
     "BA Asset", "BA POS Invoice", "BA Salary Slip", "BA Payroll Entry",
     "BA Leave Application", "BA Attendance", "BA Expense Claim",
@@ -43,6 +52,12 @@ _DOCTYPE_LOWER = {dt.lower(): dt for dt in KNOWN_DOCTYPES}
 
 def classify_intent(message, history=None):
     msg_lower = message.lower()
+
+    # Capability questions ("can you do X?") must be caught FIRST
+    # before keyword scoring, or they get misrouted as DB queries
+    if any(phrase in msg_lower for phrase in CAPABILITY_PHRASES):
+        return {"type": "general", "doctypes": [], "capability": True}
+
     mentioned = [dt for lower_dt, dt in _DOCTYPE_LOWER.items() if lower_dt in msg_lower]
     read_score = sum(1 for kw in READ_KEYWORDS if kw in msg_lower)
     write_score = sum(1 for kw in WRITE_KEYWORDS if kw in msg_lower)

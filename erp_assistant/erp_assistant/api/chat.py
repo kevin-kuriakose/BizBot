@@ -1,3 +1,12 @@
+try:
+    from bizaxl_radar.intelligence.domain_loader import (
+        get_system_prompt_addition as _get_domain_ctx,
+        get_domain_label as _get_domain_label,
+    )
+except ImportError:
+    def _get_domain_ctx(): return ''
+    def _get_domain_label(): return 'business'
+
 import re
 import frappe
 import json
@@ -13,37 +22,37 @@ from erp_assistant.erp_assistant.api.permissions import (
 
 # Frappe table name map — used to correct hallucinated names
 TABLE_ALIASES = {
-    "sales invoice": "tabSales Invoice",
-    "purchase invoice": "tabPurchase Invoice",
-    "sales order": "tabSales Order",
-    "purchase order": "tabPurchase Order",
-    "customer": "tabCustomer",
-    "supplier": "tabSupplier",
-    "item": "tabItem",
-    "stock entry": "tabStock Entry",
+    "sales invoice": "tabBA Sales Invoice",
+    "purchase invoice": "tabBA Purchase Invoice",
+    "sales order": "tabBA Sales Order",
+    "purchase order": "tabBA Purchase Order",
+    "customer": "tabBA Customer",
+    "supplier": "tabBA Supplier",
+    "item": "tabBA Item",
+    "stock entry": "tabBA Stock Entry",
     "stock ledger entry": "tabStock Ledger Entry",
-    "journal entry": "tabJournal Entry",
-    "payment entry": "tabPayment Entry",
+    "journal entry": "tabBA Journal Entry",
+    "payment entry": "tabBA Payment Entry",
     "employee": "tabEmployee",
-    "quotation": "tabQuotation",
+    "quotation": "tabBA Quotation",
     "delivery note": "tabDelivery Note",
     "purchase receipt": "tabPurchase Receipt",
     "sales transactions": "tabSales Invoice",
     "salestransactions": "tabSales Invoice",
     "sales_invoices": "tabSales Invoice",
     "salesinvoices": "tabSales Invoice",
-    "invoice": "tabSales Invoice",
-    "invoices": "tabSales Invoice",
+    "invoice": "tabBA Sales Invoice",
+    "invoices": "tabBA Sales Invoice",
     "transactions": "tabSales Invoice",
     "purchase_invoices": "tabPurchase Invoice",
     "purchaseinvoices": "tabPurchase Invoice",
     "sales_orders": "tabSales Order",
     "purchase_orders": "tabPurchase Order",
-    "customers": "tabCustomer",
-    "suppliers": "tabSupplier",
-    "items": "tabItem",
+    "customers": "tabBA Customer",
+    "suppliers": "tabBA Supplier",
+    "items": "tabBA Item",
     "employees": "tabEmployee",
-    "payments": "tabPayment Entry",
+    "payments": "tabBA Payment Entry",
 }
 
 
@@ -62,31 +71,26 @@ def chat(message, history=None, session_data=None, context=None):
         if session_data.get("mode") in ("collecting_fields", "confirm_submit", "collecting_items", "confirm_create_linked", "collecting_linked_fields", "confirm_create_item", "creating_new_item", "confirm_restart", "resubmit"):
             return handle_write(message, history, session_data, {})
 
+        # ── Inject domain-specific AI context ──────────────────
+        _domain_context = _get_domain_ctx()
+        _domain_name    = _get_domain_label()
+
         intent = classify_intent(message, history)
 
-        if intent["type"] == "write":
-            # Check create permission
-            doctype = intent.get("doctypes", [None])[0]
-            if doctype and not can_create(doctype):
-                role = get_role_level().replace("_", " ").title()
-                return {
-                    "response": (
-                        "You don't have permission to create **" + (doctype or "") + "**.\n\n"
-                        "Your role (" + role + ") cannot create this document type.\n\n"
-                        "Please contact your Store Manager or Admin."
-                    ),
-                    "type": "error",
-                    "session_data": {},
-                }
-            return handle_write(message, history, session_data, intent)
-        elif intent["type"] == "analytics":
-            return handle_analytics(message, history, intent, page_context)
-        elif intent["type"] == "read":
-            return handle_read(message, history, intent, page_context)
-        elif intent["type"] == "help":
-            return handle_help(message, history)
-        else:
-            return handle_general(message, history)
+        # Capability / feature questions — answer conversationally, never hit DB
+        if intent.get("capability") or (intent.get("type") == "general" and not intent.get("doctypes")):
+            cap_q = ("You are BizBot, an AI assistant for BizAxl ERP. "
+                     "The user asks about your capabilities. Answer helpfully. "
+                     "BizBot can: query ERP data, create documents, analyse trends, "
+                     "read PDFs (RAG), and analyse images via AI Vision (OCR). "
+                     "To upload: click the Files chip in the chat. "
+                     "Question: " + message)
+            try:
+                cap_ans = call_ollama([{"role": "user", "content": cap_q}])
+            except Exception:
+                cap_ans = "Yes! Click the \uD83D\uDCCE Files chip to upload a PDF or image."
+            return {"response": cap_ans, "type": "general", "session_data": session_data}
+
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "ERP Assistant Chat Error")

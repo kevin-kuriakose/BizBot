@@ -88,7 +88,7 @@ erp_assistant.widget = {
                             '<button class="bb-chip" data-q="Create a new sales invoice" ' +
                             'style="padding:4px 10px;border-radius:12px;border:1px solid #2a2a35;' +
                             'background:transparent;color:#888;cursor:pointer;font-size:11px">➕ Invoice</button>' +
-                            '<button id="bb-pdf-btn" class="bb-chip" style="padding:4px 10px;border-radius:12px;border:1px solid #2a2a35;background:transparent;color:#888;cursor:pointer;font-size:11px">📎 PDF</button></div>'
+                            '<button id="bb-pdf-btn" class="bb-chip" style="padding:4px 10px;border-radius:12px;border:1px solid #2a2a35;background:transparent;color:#888;cursor:pointer;font-size:11px">📎 Files</button></div>'
                     },
                     {
                         fieldtype: "Data",
@@ -152,7 +152,7 @@ erp_assistant.widget = {
                     if (!fi) {
                         fi = document.createElement("input");
                         fi.type = "file"; fi.id = "bb-file-input";
-                        fi.accept = ".pdf,application/pdf"; fi.style.display = "none";
+                        fi.accept = ".pdf,.jpg,.jpeg,.png,.webp,.gif,application/pdf,image/*"; fi.style.display = "none";
                         document.body.appendChild(fi);
                         fi.addEventListener("change", function(e) {
                             if (e.target.files && e.target.files[0]) self.processPdf(e.target.files[0]);
@@ -165,6 +165,30 @@ erp_assistant.widget = {
             self.loadPermissions(function(perms) {
                 self._applyPermissions(perms);
             });
+
+            // ── Paste image directly into chat (Ctrl+V / right-click paste) ──
+            var _msgInput = self._dialog.$wrapper.find("input[data-fieldname='message']")[0];
+            if (_msgInput && !_msgInput._pasteWired) {
+                _msgInput._pasteWired = true;
+                _msgInput.addEventListener("paste", function(e) {
+                    var items = (e.clipboardData || window.clipboardData || {}).items;
+                    if (!items) return;
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i].type && items[i].type.startsWith("image/")) {
+                            var file = items[i].getAsFile();
+                            if (file) {
+                                e.preventDefault();
+                                // Give it a filename with timestamp
+                                Object.defineProperty(file, "name", {
+                                    writable: true, value: "pasted-image-" + Date.now() + ".png"
+                                });
+                                self.processPdf(file);
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
         }, 300);
     },
     quickSend: function(msg) {
@@ -420,41 +444,95 @@ erp_assistant.widget._doc = null;
 erp_assistant.widget.processPdf = function(file) {
     var self = this;
     if (!file) return;
-    if (file.size > 20 * 1024 * 1024) {
-        self.addMsg("a", "\u274C PDF too large (max 20 MB).");
+
+    // ── Validate format ──────────────────────────────────────────────────────
+    var ext = (file.name || "").toLowerCase().split(".").pop();
+    var PDF_EXTS = ["pdf"];
+    var IMG_EXTS = ["jpg","jpeg","png","webp","gif","bmp"];
+
+    if (!PDF_EXTS.includes(ext) && !IMG_EXTS.includes(ext)) {
+        self.addMsg("a",
+            "\u274C **Invalid format.**\n\n" +
+            "BizBot can only read:\n" +
+            "\u2022 **PDF** documents\n" +
+            "\u2022 **Images** \u2014 JPG, PNG, WEBP, GIF\n\n" +
+            "Excel (\u00d7), Word (\u00d7), CSV (\u00d7) are not supported.\n" +
+            "Please try a **PDF** or an **image**."
+        );
         return;
     }
-    self.addMsg("a", "\uD83D\uDCCE Processing **" + file.name + "**\u2026 one moment.");
+
+    var isImage = IMG_EXTS.includes(ext);
+    var maxMB   = isImage ? 10 : 20;
+
+    if (file.size > maxMB * 1024 * 1024) {
+        self.addMsg("a", "\u274C File too large (max " + maxMB + " MB for " +
+            (isImage ? "images" : "PDFs") + "). Please compress and try again.");
+        return;
+    }
+
+    self.addMsg("a", (isImage ? "\uD83D\uDDBC\uFE0F" : "\uD83D\uDCCE") +
+        " Processing **" + file.name + "**\u2026 one moment.");
+
     var reader = new FileReader();
     reader.onload = function(e) {
-        var b64 = (e.target.result || "").split(",")[1];
-        if (!b64) { self.addMsg("a", "\u274C Could not read the file."); return; }
-        frappe.call({
-            method: "erp_assistant.erp_assistant.api.pdf.process_pdf",
-            args: { file_b64: b64, file_name: file.name },
-            timeout: 120,
-            callback: function(r) {
-                if (r.message && r.message.doc_id) {
-                    self._doc = { doc_id: r.message.doc_id, name: r.message.name };
-                    var m = r.message;
-                    var btn = document.getElementById("bb-pdf-btn");
-                    if (btn) {
-                        var sn = file.name.length > 14 ? file.name.slice(0,11) + "\u2026" : file.name;
-                        btn.innerHTML = "\uD83D\uDCCE " + sn + " \u00D7";
-                        btn.style.borderColor = "#00e5a0";
-                        btn.style.color = "#00e5a0";
-                    }
-                    self.addMsg("a",
-                        "\u2705 **" + file.name + "** loaded!\n\n" +
-                        "\uD83D\uDCC4 ~" + m.word_count + " words \u00B7 " + m.chunk_count + " sections indexed\n\n" +
-                        "Ask me anything about this document."
-                    );
-                }
-            },
-            error: function() {
-                self.addMsg("a", "\u274C Failed to process PDF. Run: pip install pypdf --break-system-packages");
+        var dataUrl = e.target.result || "";
+        var b64      = dataUrl.split(",")[1];
+        var mimeType = dataUrl.split(";")[0].split(":")[1];
+        if (!b64) { self.addMsg("a", "\u274C Could not read file."); return; }
+
+        if (isImage) {
+            // ── Image: store b64 in _doc; Groq Vision processes at query time ──
+            self._doc = { type: "image", image_b64: b64, mime_type: mimeType, name: file.name };
+            var btn = document.getElementById("bb-pdf-btn");
+            if (btn) {
+                var sn = file.name.length > 14 ? file.name.slice(0,11) + "\u2026" : file.name;
+                btn.innerHTML = "\uD83D\uDDBC\uFE0F " + sn + " \u00D7";
+                btn.style.borderColor = "#00e5a0";
+                btn.style.color       = "#00e5a0";
+                btn.title = "Click to remove: " + file.name;
             }
-        });
+            self.addMsg("a",
+                "\uD83D\uDDBC\uFE0F **" + file.name + "** ready!\n\n" +
+                "I can see this image using **AI Vision**. Try asking:\n" +
+                "\u2022 \"What does this document say?\"\n" +
+                "\u2022 \"Extract all amounts and dates\"\n" +
+                "\u2022 \"Read the items on this invoice\"\n" +
+                "\u2022 \"Summarize what you see\""
+            );
+        } else {
+            // ── PDF: extract + chunk on backend, RAG at query time ─────────────
+            frappe.call({
+                method: "erp_assistant.erp_assistant.api.pdf.process_pdf",
+                args: { file_b64: b64, file_name: file.name },
+                timeout: 120,
+                callback: function(r) {
+                    if (r.message && r.message.doc_id) {
+                        self._doc = { type: "pdf", doc_id: r.message.doc_id, name: r.message.name };
+                        var m = r.message;
+                        var btn = document.getElementById("bb-pdf-btn");
+                        if (btn) {
+                            var sn = file.name.length > 14 ? file.name.slice(0,11) + "\u2026" : file.name;
+                            btn.innerHTML = "\uD83D\uDCCE " + sn + " \u00D7";
+                            btn.style.borderColor = "#00e5a0";
+                            btn.style.color       = "#00e5a0";
+                            btn.title = "Click to remove: " + file.name;
+                        }
+                        self.addMsg("a",
+                            "\u2705 **" + file.name + "** loaded!\n\n" +
+                            "\uD83D\uDCC4 ~" + m.word_count + " words \u00B7 " +
+                            m.chunk_count + " sections indexed\n\n" +
+                            "Ask me anything about this document."
+                        );
+                    }
+                },
+                error: function() {
+                    self.addMsg("a",
+                        "\u274C PDF processing failed.\n" +
+                        "Run: `pip install pypdf --break-system-packages`");
+                }
+            });
+        }
     };
     reader.readAsDataURL(file);
 };
@@ -463,7 +541,7 @@ erp_assistant.widget.clearPdf = function() {
     this._doc = null;
     var btn = document.getElementById("bb-pdf-btn");
     if (btn) {
-        btn.innerHTML = "\uD83D\uDCCE PDF";
+        btn.innerHTML = "\uD83D\uDCCE Files";
         btn.style.borderColor = "#2a2a35";
         btn.style.color = "#888";
     }
@@ -493,8 +571,12 @@ erp_assistant.widget.clearPdf = function() {
         if (msgs) { msgs.appendChild(td); msgs.scrollTop = msgs.scrollHeight; }
 
         frappe.call({
-            method: "erp_assistant.erp_assistant.api.pdf.ask_with_doc",
-            args: { question: msg, doc_id: self._doc.doc_id, doc_name: self._doc.name },
+            method: (self._doc.type === "image" || self._doc.image_b64)
+                ? "erp_assistant.erp_assistant.api.pdf.ask_with_image"
+                : "erp_assistant.erp_assistant.api.pdf.ask_with_doc",
+            args: (self._doc.type === "image" || self._doc.image_b64)
+                ? { question: msg, image_b64: self._doc.image_b64, file_name: self._doc.name }
+                : { question: msg, doc_id: self._doc.doc_id, doc_name: self._doc.name },
             timeout: 180,
             callback: function(r) {
                 var el = document.getElementById(tid); if (el) el.remove();
@@ -525,7 +607,7 @@ erp_assistant.widget.send = function(msg) {
     var td   = document.createElement("div");
     td.id    = tid;
     td.style.cssText = "display:flex;gap:7px;";
-    var thinkLabel = self._doc ? "Reading document\u2026" : "Thinking\u2026";
+    var thinkLabel = self._doc ? (self._doc.type === "image" ? "Analysing image\u2026" : "Reading document\u2026") : "Thinking\u2026";
     td.innerHTML =
         '<div style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#00e5a0,#00c47a);display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
         '<span style="font-size:8px;font-weight:800;color:#0a1a12">BB</span></div>' +
@@ -536,8 +618,13 @@ erp_assistant.widget.send = function(msg) {
 
     if (self._doc) {
         // ── PDF RAG mode ──────────────────────────────────────────────────────
-        method = "erp_assistant.erp_assistant.api.pdf.ask_with_doc";
-        args   = { question: msg, doc_id: self._doc.doc_id, doc_name: self._doc.name };
+        if (self._doc.type === "image" || self._doc.image_b64) {
+            method = "erp_assistant.erp_assistant.api.pdf.ask_with_image";
+            args   = { question: msg, image_b64: self._doc.image_b64, file_name: self._doc.name };
+        } else {
+            method = "erp_assistant.erp_assistant.api.pdf.ask_with_doc";
+            args   = { question: msg, doc_id: self._doc.doc_id, doc_name: self._doc.name };
+        }
         onSuccess = function(r) {
             var el = document.getElementById(tid); if (el) el.remove();
             self.addMsg("a", r.message || "I couldn\'t find an answer in the document.");
@@ -575,6 +662,119 @@ erp_assistant.widget.send = function(msg) {
         error: function() {
             var el = document.getElementById(tid); if (el) el.remove();
             self.addMsg("a", "\u274C Error. Check your Groq API key.");
+            self._waiting = false;
+        }
+    });
+};
+
+// ── FINAL DEFINITIVE send() v2 — normal / PDF RAG / Image QA / Image→Invoice ──
+erp_assistant.widget.send = function(msg) {
+    if (!msg || this._waiting) return;
+    var self = this;
+    self.addMsg("u", msg);
+    self._history.push({role:"user", content:msg});
+    self._waiting = true;
+
+    var msgs = document.getElementById("eca-msgs");
+    var tid  = "et" + Date.now();
+    var td   = document.createElement("div");
+    td.id    = tid; td.style.cssText = "display:flex;gap:7px;";
+    var isImg = self._doc && (self._doc.type === "image" || self._doc.image_b64);
+
+    // Write-intent detection for image mode
+    var WRITE_WORDS = ["create","make","add","generate","draft","raise","build","put","enter","insert"];
+    var DOC_WORDS   = ["invoice","bill","order","receipt","quotation","sinv"];
+    var ml = msg.toLowerCase();
+    var isWriteIntent = WRITE_WORDS.some(function(w){return ml.indexOf(w) > -1;}) &&
+                        DOC_WORDS.some(function(w){return ml.indexOf(w) > -1;});
+
+    var lbl = self._doc
+        ? (isImg ? (isWriteIntent ? "Creating invoice\u2026" : "Analysing image\u2026") : "Reading document\u2026")
+        : "Thinking\u2026";
+
+    td.innerHTML = '<div style="width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#00e5a0,#00c47a);display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:8px;font-weight:800;color:#0a1a12">BB</span></div>'
+        + '<div style="padding:8px 12px;border-radius:10px;font-size:12px;background:#1e1e26;color:#555;border:1px solid #2a2a35;border-left:3px solid #00e5a0">' + lbl + '</div>';
+    if (msgs) { msgs.appendChild(td); msgs.scrollTop = msgs.scrollHeight; }
+
+    var method, args, onOK;
+
+    if (self._doc && isImg && isWriteIntent) {
+        // ── Create invoice from image ─────────────────────────────────────────
+        method = "erp_assistant.erp_assistant.api.pdf.create_invoice_from_image";
+        args   = { image_b64: self._doc.image_b64, file_name: self._doc.name };
+        onOK   = function(r) {
+            var el = document.getElementById(tid); if (el) el.remove();
+            var res = r.message || r;
+            if (res && res.ok) {
+                var total = parseFloat(res.total || 0).toLocaleString("en-IN", {maximumFractionDigits:2});
+                self.addMsg("a",
+                    "\u2705 **Draft invoice created!**\n\n" +
+                    "\uD83D\uDCC4 **" + res.name + "** \u2014 " + res.item_count +
+                    " item(s) \u00B7 \u20B9" + total + "\n\n" +
+                    "**Customer:** " + (res.customer || "Not set") + "\n\n" +
+                    "[\uD83D\uDD17 Open Invoice](/app/ba-sales-invoice/" + res.name + ")\n\n" +
+                    "_Review customer, tax template, and item codes \u2014 then Submit._"
+                );
+            } else {
+                self.addMsg("a", "\u274C " + ((res && res.error) || "Could not create invoice. Check Error Log."));
+            }
+            self._history.push({role:"assistant", content:"Invoice created: " + ((res && res.name) || "failed")});
+            self._waiting = false;
+        };
+
+    } else if (self._doc && isImg) {
+        // ── Image QA via Groq Vision ──────────────────────────────────────────
+        method = "erp_assistant.erp_assistant.api.pdf.ask_with_image";
+        args   = { question: msg, image_b64: self._doc.image_b64, file_name: self._doc.name };
+        onOK   = function(r) {
+            var el = document.getElementById(tid); if (el) el.remove();
+            self.addMsg("a", r.message || "I could not analyse the image.");
+            self._history.push({role:"assistant", content: r.message || ""});
+            self._waiting = false;
+        };
+
+    } else if (self._doc) {
+        // ── PDF RAG ───────────────────────────────────────────────────────────
+        method = "erp_assistant.erp_assistant.api.pdf.ask_with_doc";
+        args   = { question: msg, doc_id: self._doc.doc_id, doc_name: self._doc.name };
+        onOK   = function(r) {
+            var el = document.getElementById(tid); if (el) el.remove();
+            self.addMsg("a", r.message || "Could not find an answer in the document.");
+            self._history.push({role:"assistant", content: r.message || ""});
+            self._waiting = false;
+        };
+
+    } else {
+        // ── Normal ERP chat ───────────────────────────────────────────────────
+        method = "erp_assistant.erp_assistant.api.chat.chat";
+        args   = {
+            message:      msg,
+            history:      JSON.stringify(self._history.slice(-10)),
+            session_data: JSON.stringify(self._session || {}),
+            context:      JSON.stringify({
+                route:     frappe.get_route     ? frappe.get_route()     : [],
+                route_str: frappe.get_route_str ? frappe.get_route_str() : "",
+                user:      frappe.session.user
+            })
+        };
+        onOK = function(r) {
+            var el = document.getElementById(tid); if (el) el.remove();
+            var res = r.message;
+            if (res) {
+                self._session = res.session_data || {};
+                self.addMsg("a", res.response || "No response.", res);
+                self._history.push({role:"assistant", content: res.response || ""});
+            }
+            self._waiting = false;
+        };
+    }
+
+    frappe.call({
+        method: method, args: args, timeout: 180,
+        callback: onOK,
+        error: function() {
+            var el = document.getElementById(tid); if (el) el.remove();
+            self.addMsg("a", "\u274C Error connecting to AI.");
             self._waiting = false;
         }
     });
